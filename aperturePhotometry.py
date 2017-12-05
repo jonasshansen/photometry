@@ -68,7 +68,7 @@ class aperturePhotometry():
     
     
     
-    Jonas Svenstrup Hansen, november 2017, jonas.svenstrup@gmail.com
+    Jonas Svenstrup Hansen, 2017, jonas.svenstrup@gmail.com
     '''
     def __init__(self, dirpath, bias = False, flat = True, stampsize = 30,
                  radius = 15, bkginner = 20, bkgouter = 25,
