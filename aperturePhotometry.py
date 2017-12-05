@@ -32,6 +32,9 @@ class aperturePhotometry():
         Outer radius in pixels of the annulus used to calculate the background.
     saveplots : boolean
         Save plots to files if ``True``. Default is ``True``.
+    datamethod : string
+        Data method: ``'grayscale'`` or ``'rgb´``. Default is grayscale. The
+        change is in the method ``loaddata``.
         
     Usage
     =====
@@ -67,12 +70,13 @@ class aperturePhotometry():
     '''
     def __init__(self, dirpath, bias = False, flat = True, stampsize = 30,
                  radius = 15, bkginner = 20, bkgouter = 25,
-                 saveplots = True):
+                 saveplots = True, datatype = 'grayscale'):
         self.dirpath = dirpath
         self.stampsize = stampsize
         self.radius = radius
         self.bkginner = bkginner
         self.bkgouter = bkgouter
+        self.datatype = datatype
         
         # Create directory for output at dirpath:
         self.outdirpath = os.path.join(self.dirpath,'out')
@@ -423,6 +427,7 @@ class aperturePhotometry():
     def loaddata(self, datatype):
         '''
         Load jpeg data of the given type from the directory ``self.dirpath``.
+        Possibility to load RGB data.
         
         Parameters
         ==========
@@ -435,12 +440,33 @@ class aperturePhotometry():
         data : numpy array
             Array containing the data in ``file`` with datatype ``'float32'``.
         '''
-        data = []
-        for file in glob.glob(self.dirpath + datatype + '_*.jpg'):
-            with Image.open(file) as im:
-                data.append(np.asarray(im, dtype='float32'))
-        return np.asarray(data)
-    
+        if self.datamethod == 'grayscale':
+            data = []
+            for file in glob.glob(self.dirpath + datatype + '_*.jpg'):
+                with Image.open(file) as im:
+                    data.append(np.asarray(im, dtype='float32'))
+                    return np.asarray(data)
+        elif self.datamethod == 'rgb':
+            data = []
+            for file in glob.glob(self.dirpath + datatype + '_*.jpg'):
+                with Image.open(file) as im:
+                    data.append(np.sum(np.asarray(im, dtype='float32')),axis=-1)
+#                    exif_dict.get('0th')
+#                    re.search("'.*'", np.str(a))
+                    # FIX ME: get header time stamp (see headerRGB.py)
+                    return np.asarray(data)
+        else:
+            raise ValueError('Wrong data method.')
+        
+#    def get_exif(fn):
+#        ret = {}
+#        i = Image.open(fn)
+#        info = i._getexif()
+#        
+#        for tag, value in info.items():
+#            decoded = TAGS.get(tag, tag)
+#            ret[decoded] = value
+#        return ret
     
     def getMasterflat(self):
         '''
