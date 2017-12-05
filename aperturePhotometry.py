@@ -3,7 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import matplotlib.patches as patches
-
+import re
+import piexif
+from astropy.time import Time
 
 class aperturePhotometry():
     '''
@@ -70,13 +72,13 @@ class aperturePhotometry():
     '''
     def __init__(self, dirpath, bias = False, flat = True, stampsize = 30,
                  radius = 15, bkginner = 20, bkgouter = 25,
-                 saveplots = True, datatype = 'grayscale'):
+                 saveplots = True, datamethod = 'grayscale'):
         self.dirpath = dirpath
         self.stampsize = stampsize
         self.radius = radius
         self.bkginner = bkginner
         self.bkgouter = bkgouter
-        self.datatype = datatype
+        self.datamethod = datamethod
         
         # Create directory for output at dirpath:
         self.outdirpath = os.path.join(self.dirpath,'out')
@@ -84,7 +86,8 @@ class aperturePhotometry():
             os.makedirs(self.outdirpath)
             
         # Load data:
-        self.data = self.loaddata('science')
+        self.data, self.times = self.loaddata('science')
+        
         # Subtract bias is bias parameter is true:
         self.masterbias, self.biaslevel, self.biasstd = self.getBias()
         if bias:
@@ -99,10 +102,9 @@ class aperturePhotometry():
         self.flux = np.zeros(self.data.shape[0])
         self.rawflux = np.zeros_like(self.flux)
         self.bkglevel = np.zeros_like(self.flux)
-        self.time = np.arange(np.shape(self.data)[0])
         
         # Loop over each image:
-        for i in range(len(self.time)):
+        for i in range(len(self.flux)):
             # Find target(s):
             coord = self.findtargets(self.data[i,:,:])
             # TODO: extend to multiple targets
@@ -124,10 +126,10 @@ class aperturePhotometry():
         self.flux = self.rawflux - self.bkglevel
         
         # Plot timeseries:
-        self.plottimeseries_one(self.flux, 'flux', save = saveplots)
-        self.plottimeseries_one(self.rawflux, 'rawflux', save = saveplots)
-        self.plottimeseries_one(self.bkglevel, 'bkglevel', save = saveplots)
-        self.plottimeseries(self.flux, self.bkglevel, save = saveplots)
+        self.plottimeseries_one(self.flux, 'flux', time = self.times, save = saveplots)
+        self.plottimeseries_one(self.rawflux, 'rawflux', time = self.times, save = saveplots)
+        self.plottimeseries_one(self.bkglevel, 'bkglevel', time = self.times, save = saveplots)
+        self.plottimeseries(self.flux, self.bkglevel, time = self.times, save = saveplots)
         
         
     def makestamp(self, i, coord, stampsize):
@@ -376,12 +378,15 @@ class aperturePhotometry():
             Time array of one dimension to plot. Default is ``None`` which 
             creates an array from 0 to ``len(value)`` in intervals of 1.
         '''
-        if time is None:
+        if np.isnan(time).any():
             time = range(len(value))
         fig = plt.figure()
-        plt.plot(value,label=name)
+        plt.plot(time, value,label=name)
         plt.legend()
-        plt.xlabel('Time')
+        if time is None:
+            plt.xlabel('Time')
+        else:
+            plt.xlabel('Time (Julian Date)')
         plt.ylabel(name)
         plt.savefig(os.path.join(self.outdirpath, name + '_timeseries.pdf'))
         plt.close(fig)
@@ -405,7 +410,7 @@ class aperturePhotometry():
             Determine whether to save figures in the out directory 
             ``self.outdirpath``. Default is ``True``.
         '''
-        if time is None:
+        if np.isnan(time).any():
             time = range(len(flux))
         fig, ax1 = plt.subplots()
         ax2 = ax1.twinx()
@@ -416,7 +421,10 @@ class aperturePhotometry():
         ax1.legend(loc=2)
         ax2.legend(loc=1)
         
-        ax1.set_xlabel('Time')
+        if time is None:
+            ax1.set_xlabel('Time')
+        else:
+            ax1.set_xlabel('Time (Julian Date)')
         ax1.set_ylabel('Flux')
         ax2.set_ylabel('Background level')
         
@@ -442,31 +450,67 @@ class aperturePhotometry():
         '''
         if self.datamethod == 'grayscale':
             data = []
-            for file in glob.glob(self.dirpath + datatype + '_*.jpg'):
+            for file in sorted(glob.glob(self.dirpath + datatype + '_*.jpg'), key=lambda name: int(name.split('_')[1].split('.')[0])):
                 with Image.open(file) as im:
                     data.append(np.asarray(im, dtype='float32'))
-                    return np.asarray(data)
+            return (np.asarray(data), np.nan)
         elif self.datamethod == 'rgb':
             data = []
+            time = []
             for file in glob.glob(self.dirpath + datatype + '_*.jpg'):
                 with Image.open(file) as im:
-                    data.append(np.sum(np.asarray(im, dtype='float32')),axis=-1)
-#                    exif_dict.get('0th')
-#                    re.search("'.*'", np.str(a))
-                    # FIX ME: get header time stamp (see headerRGB.py)
-                    return np.asarray(data)
+                    data.append(np.sum(np.asarray(im, dtype='float32'),axis=-1))
+                try:
+                    with piexif.load(file) as im_dict:
+                        t = re.search("'.*'", np.str(im_dict.get('0th')))
+                        t = t.group(0)[1:-1]
+                        t = self.replacenth(t,':','-',1)
+                        t = self.replacenth(t,':','-',2)
+                        t.format = 'jd'
+                        time.append(t)
+                except:
+                    time.append(np.nan)
+#                    raise Warning('Could not get Julian Date from file.')
+            return (np.asarray(data), np.asarray(time))
         else:
             raise ValueError('Wrong data method.')
         
-#    def get_exif(fn):
-#        ret = {}
-#        i = Image.open(fn)
-#        info = i._getexif()
-#        
-#        for tag, value in info.items():
-#            decoded = TAGS.get(tag, tag)
-#            ret[decoded] = value
-#        return ret
+        
+    def replacenth(self, string, sub, wanted, n):
+        '''
+        Replace ``n``'th occurence of substring ``sub`` in string ``string`` with 
+        ``wanted``.
+        
+        Parameters
+        ==========
+        string : string
+            String in which to replace stuff.
+        sub : string
+            Substring to find and replace.
+        wanted : string
+            String to replace ``sub``.
+        n : int
+            Occurence number of the substring to replace.
+        
+        Returns
+        =======
+        newString : string
+            The string where the ``n``'th occurence of ``sub`` has been replaced
+            with ``wanted``.
+        
+        Credits
+        =======
+        Copied from
+        
+        https://stackoverflow.com/questions/35091557/replace-nth-occurrence-of-substring-in-string
+        '''
+        where = [m.start() for m in re.finditer(sub, string)][n-1]
+        before = string[:where]
+        after = string[where:]
+        after = after.replace(sub, wanted, 1)
+        newString = before + after
+        return newString
+    
     
     def getMasterflat(self):
         '''
@@ -477,7 +521,7 @@ class aperturePhotometry():
         masterflat : numpy array
             Normalized master flat shaped like a data frame.
         '''
-        flats = self.loaddata('flats')
+        flats, _ = self.loaddata('flats')
         #flats -= masterbias # error: the flats are of too low flux
         for flat in range(np.shape(flats)[0]):
             flatmean = np.mean(flats[flat,:,:])
@@ -499,7 +543,7 @@ class aperturePhotometry():
         biasstd : float
             Standard deviation of the values in the master bias.
         '''
-        biases = self.loaddata('bias')
+        biases , _ = self.loaddata('bias')
         masterbias = np.mean(biases, 0)
         biasstd = np.std(masterbias)
         biaslevel = np.mean(masterbias)
